@@ -4,17 +4,11 @@ A fully **offline** Flutter mobile app for tracking MTN MoMo and Airtel Money fl
 
 ---
 
-## 📱 Screenshots
-
-> Run `flutter run` to see the app in action on your device or emulator.
-
----
-
-## 🚀 Features
+## Features
 
 | Feature | Description |
 |---|---|
-| **Offline Storage** | All data stored locally using SQLite via `sqflite` — no internet required |
+| **Offline Storage** | All data stored locally using SQLite — no internet required |
 | **Dual Network Support** | Track MTN MoMo (yellow) and Airtel Money (red) separately |
 | **Cash In / Cash Out** | Record both directions of float movement |
 | **Auto Balance Calculation** | Running float balance updated automatically after every transaction |
@@ -24,138 +18,66 @@ A fully **offline** Flutter mobile app for tracking MTN MoMo and Airtel Money fl
 | **Daily Summary** | Dashboard showing today's Cash In, Cash Out, fees earned and net float flow |
 | **Transaction History** | Full scrollable list of all transactions with expand-for-details |
 | **Filter Transactions** | Filter history by network (MTN / Airtel) or by date range |
-| **Swipe to Delete** | Delete any transaction with a swipe + confirmation dialog |
-| **Export to CSV** | Export all transactions to a `.csv` file |
-| **Share Export** | Share the CSV file via any app on the device (WhatsApp, email, etc.) |
+| **Swipe to Delete** | Delete any transaction with a swipe and confirmation dialog |
+| **Export to CSV** | Export all transactions to a CSV file and share via any app |
 
 ---
 
-## 🏗️ Project Structure
-
-```
-lib/
-├── main.dart                        # App entry point & theme setup
-├── models/
-│   └── transaction.dart             # FloatTransaction model + enums
-├── database/
-│   └── database_helper.dart         # SQLite singleton (CRUD + export)
-├── screens/
-│   ├── home_screen.dart             # Dashboard — balances & quick actions
-│   ├── add_transaction_screen.dart  # Form to record Cash In / Cash Out
-│   ├── history_screen.dart          # Transaction list with filter & share
-│   └── summary_screen.dart          # Daily summary per network + combined
-└── widgets/
-    └── transaction_card.dart        # Reusable transaction list item
-```
-
----
-
-## ⚙️ How the App Works
+## How the App Works
 
 ### 1. Home Screen
-When you open the app, you see two large cards:
-- **MTN MoMo** (yellow) — shows current MTN float balance
-- **Airtel Money** (red) — shows current Airtel float balance
+When you open the app, you see two large cards — one for MTN MoMo (yellow) and one for Airtel Money (red) — each showing the current float balance for that network.
 
-Tap either card, or use the **New Transaction** FAB at the bottom, to record a transaction. Quick Action buttons (Cash In / Cash Out) let you jump straight into a transaction type.
-
-The bottom of the home screen shows your **5 most recent transactions** with a "See All" link.
+Tap either card or use the **New Transaction** button at the bottom to record a transaction. The **Cash In** and **Cash Out** quick-action buttons let you jump straight into a specific transaction type. The bottom of the screen shows your 5 most recent transactions with a "See All" link.
 
 ---
 
 ### 2. Recording a Transaction
-On the **Add Transaction** screen:
-1. Toggle between **Cash In** or **Cash Out** using the segmented button at the top.
-2. Enter the **Amount** in UGX.
-3. Optionally enter a **Fee/Charge** earned on the transaction.
-4. Optionally enter the **Customer Name** and **Phone Number**.
-5. Add any **Notes** if needed.
-6. Tap **Record** — the app automatically calculates and saves the new balance.
+On the Add Transaction screen, select whether it is a **Cash In** or **Cash Out**, enter the amount in UGX, and optionally add a fee, customer name, phone number, and notes. Tap **Record** and the app automatically calculates and saves the new float balance.
 
-> ⚠️ If you try to record a Cash Out greater than your current float, the app will block it and show an error.
+If you try to record a Cash Out greater than the current float balance, the app blocks it and shows an error message.
 
 ---
 
 ### 3. Transaction History
-The **History** screen (accessible from the top-right history icon) shows all recorded transactions in reverse chronological order.
-
-- **Expand** any row to see full details (fee, customer, notes, transaction ID).
-- **Swipe left** on a transaction to delete it (with a confirmation prompt).
-- **Filter** by tapping the filter icon:
-  - Show only MTN MoMo transactions
-  - Show only Airtel Money transactions
-  - Pick a custom date range
-  - Clear all filters
-- **Share / Export** by tapping the share icon — exports all transactions to a CSV file and opens the share sheet.
+The History screen shows all recorded transactions in reverse chronological order. You can:
+- Tap any row to expand and see full details including fee, customer info, notes and transaction ID
+- Swipe left on a transaction to delete it (requires confirmation)
+- Filter by MTN only, Airtel only, or a custom date range
+- Share / export all transactions as a CSV file via the share icon
 
 ---
 
 ### 4. Daily Summary
-The **Summary** screen (accessible from the summarize icon on the home app bar) shows statistics for **today**:
-
-- Per-network breakdown: Cash In total, Cash Out total, current float balance
-- Combined overview: total Cash In, total Cash Out, total fees earned, net float flow (positive = more cash received than given out)
-
-Pull down to refresh at any time.
+The Summary screen shows statistics for today broken down per network — Cash In total, Cash Out total, and current float balance — as well as a combined overview showing total fees earned and net float flow. Pull down to refresh at any time.
 
 ---
 
-## 🗄️ Database
+## Tech Stack
 
-The app uses **SQLite** (via `sqflite`) stored in the device's application documents directory. The single table schema:
-
-```sql
-CREATE TABLE transactions (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  network      INTEGER NOT NULL,   -- 0 = MTN, 1 = Airtel
-  type         INTEGER NOT NULL,   -- 0 = Cash In, 1 = Cash Out
-  amount       REAL    NOT NULL,
-  fee          REAL,
-  balanceAfter REAL    NOT NULL,
-  customerName TEXT,
-  customerPhone TEXT,
-  notes        TEXT,
-  timestamp    TEXT    NOT NULL    -- ISO 8601
-)
-```
+| Package | Purpose |
+|---|---|
+| sqflite | Local SQLite database |
+| path_provider | Device file system access |
+| path | File path utilities |
+| intl | Date and currency formatting |
+| csv | CSV file generation |
+| share_plus | Native share sheet for export |
+| permission_handler | Runtime permissions |
 
 ---
 
-## 🛠️ Tech Stack
-
-| Package | Version | Purpose |
-|---|---|---|
-| `sqflite` | ^2.3.0 | Local SQLite database |
-| `path_provider` | ^2.1.1 | Device file system access |
-| `path` | ^1.8.3 | File path utilities |
-| `intl` | ^0.18.1 | Date & currency formatting |
-| `csv` | ^5.1.1 | CSV generation |
-| `share_plus` | ^7.2.1 | Native share sheet |
-| `permission_handler` | ^11.0.1 | Runtime permissions |
-
----
-
-## 📦 Getting Started
+## Getting Started
 
 ### Prerequisites
-- Flutter SDK ≥ 3.0.0
-- Android SDK or Xcode (for iOS)
+- Flutter SDK 3.0.0 or higher
+- Android SDK or Xcode for iOS
 
-### Install & Run
-```bash
-git clone https://github.com/PercyMichael/Mobile-Money.git
-cd Mobile-Money
-flutter pub get
-flutter run
-```
-
-### Build APK
-```bash
-flutter build apk --release
-```
+### Install and Run
+Clone the repository, run `flutter pub get` to install dependencies, then run `flutter run` to launch on a connected device or emulator.
 
 ---
 
-## 📄 License
+## License
 
-This project is private and intended for personal/business use by mobile money agents.
+This project is private and intended for personal or business use by mobile money agents.
