@@ -11,8 +11,9 @@ class TransactionCard extends StatelessWidget {
     this.onDelete,
   });
 
-  Color get _networkColor =>
-      transaction.network == NetworkType.mtn ? const Color(0xFFFFCC00) : const Color(0xFFE4002B);
+  Color get _networkColor => transaction.network == NetworkType.mtn
+      ? const Color(0xFFFFCC00)
+      : const Color(0xFFE4002B);
 
   Color get _iconColor =>
       transaction.network == NetworkType.mtn ? Colors.black : Colors.white;

@@ -17,13 +17,15 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDB(String filePath) async {
-    final Directory documentsDirectory = await getApplicationDocumentsDirectory();
+    final Directory documentsDirectory =
+        await getApplicationDocumentsDirectory();
     final String path = join(documentsDirectory.path, filePath);
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 3,
       onCreate: _createDB,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -33,6 +35,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         network INTEGER NOT NULL,
         type INTEGER NOT NULL,
+        serviceType INTEGER NOT NULL DEFAULT 0,
         amount REAL NOT NULL,
         fee REAL,
         balanceAfter REAL NOT NULL,
@@ -42,6 +45,27 @@ class DatabaseHelper {
         timestamp TEXT NOT NULL
       )
     ''');
+    await _createIndexes(db);
+  }
+
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createIndexes(db);
+    }
+    if (oldVersion < 3) {
+      await db.execute(
+        'ALTER TABLE transactions ADD COLUMN serviceType INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+  }
+
+  Future<void> _createIndexes(Database db) async {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_transactions_network ON transactions(network)',
+    );
   }
 
   // Get current float balance for a network
@@ -56,13 +80,33 @@ class DatabaseHelper {
     );
 
     if (result.isEmpty) return 0.0;
-    return result.first['balanceAfter'] as double;
+    return (result.first['balanceAfter'] as num).toDouble();
   }
 
   // Add new transaction
   Future<int> insertTransaction(FloatTransaction transaction) async {
     final db = await database;
     return await db.insert('transactions', transaction.toMap());
+  }
+
+  Future<int> updateTransaction(FloatTransaction transaction) async {
+    if (transaction.id == null) {
+      throw ArgumentError('Transaction ID is required for updates');
+    }
+
+    final db = await database;
+    final updated = await db.update(
+      'transactions',
+      transaction.toMap(),
+      where: 'id = ?',
+      whereArgs: [transaction.id],
+    );
+
+    if (updated > 0) {
+      await _recalculateBalancesForNetwork(transaction.network);
+    }
+
+    return updated;
   }
 
   // Get all transactions
@@ -76,7 +120,8 @@ class DatabaseHelper {
   }
 
   // Get transactions by network
-  Future<List<FloatTransaction>> getTransactionsByNetwork(NetworkType network) async {
+  Future<List<FloatTransaction>> getTransactionsByNetwork(
+      NetworkType network) async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -92,7 +137,8 @@ class DatabaseHelper {
     final db = await database;
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day).toIso8601String();
-    final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59).toIso8601String();
+    final endOfDay =
+        DateTime(now.year, now.month, now.day, 23, 59, 59).toIso8601String();
 
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
@@ -109,10 +155,51 @@ class DatabaseHelper {
     DateTime end,
   ) async {
     final db = await database;
+    final startOfDay = DateTime(start.year, start.month, start.day);
+    final endOfDay = DateTime(end.year, end.month, end.day, 23, 59, 59, 999);
+
     final List<Map<String, dynamic>> maps = await db.query(
       'transactions',
       where: 'timestamp BETWEEN ? AND ?',
-      whereArgs: [start.toIso8601String(), end.toIso8601String()],
+      whereArgs: [startOfDay.toIso8601String(), endOfDay.toIso8601String()],
+      orderBy: 'timestamp DESC',
+    );
+    return List.generate(maps.length, (i) => FloatTransaction.fromMap(maps[i]));
+  }
+
+  Future<List<FloatTransaction>> getTransactionsByFilters({
+    NetworkType? network,
+    ServiceType? serviceType,
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    final db = await database;
+    final conditions = <String>[];
+    final args = <Object?>[];
+
+    if (network != null) {
+      conditions.add('network = ?');
+      args.add(network.index);
+    }
+    if (serviceType != null) {
+      conditions.add('serviceType = ?');
+      args.add(serviceType.index);
+    }
+
+    if (start != null && end != null) {
+      final startOfDay =
+          DateTime(start.year, start.month, start.day).toIso8601String();
+      final endOfDay = DateTime(end.year, end.month, end.day, 23, 59, 59, 999)
+          .toIso8601String();
+      conditions.add('timestamp BETWEEN ? AND ?');
+      args.add(startOfDay);
+      args.add(endOfDay);
+    }
+
+    final maps = await db.query(
+      'transactions',
+      where: conditions.isEmpty ? null : conditions.join(' AND '),
+      whereArgs: conditions.isEmpty ? null : args,
       orderBy: 'timestamp DESC',
     );
     return List.generate(maps.length, (i) => FloatTransaction.fromMap(maps[i]));
@@ -121,11 +208,57 @@ class DatabaseHelper {
   // Delete transaction
   Future<int> deleteTransaction(int id) async {
     final db = await database;
-    return await db.delete(
+    final txn = await db.query(
+      'transactions',
+      columns: ['network'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+
+    if (txn.isEmpty) {
+      return 0;
+    }
+
+    final deleted = await db.delete(
       'transactions',
       where: 'id = ?',
       whereArgs: [id],
     );
+
+    if (deleted > 0) {
+      final network = NetworkType.values[txn.first['network'] as int];
+      await _recalculateBalancesForNetwork(network);
+    }
+
+    return deleted;
+  }
+
+  Future<void> _recalculateBalancesForNetwork(NetworkType network) async {
+    final db = await database;
+    final rows = await db.query(
+      'transactions',
+      where: 'network = ?',
+      whereArgs: [network.index],
+      orderBy: 'timestamp ASC, id ASC',
+    );
+
+    var runningBalance = 0.0;
+    final batch = db.batch();
+
+    for (final row in rows) {
+      final amount = (row['amount'] as num).toDouble();
+      final type = TransactionType.values[row['type'] as int];
+      runningBalance += type == TransactionType.cashIn ? amount : -amount;
+      batch.update(
+        'transactions',
+        {'balanceAfter': runningBalance},
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+    }
+
+    await batch.commit(noResult: true);
   }
 
   // Get summary statistics
@@ -133,30 +266,52 @@ class DatabaseHelper {
     final db = await database;
 
     final today = DateTime.now();
-    final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
-    final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+    final startOfDay =
+        DateTime(today.year, today.month, today.day).toIso8601String();
+    final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59)
+        .toIso8601String();
 
     // MTN Stats
     final mtnCashIn = await db.rawQuery('''
       SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
       WHERE network = ? AND type = ? AND timestamp BETWEEN ? AND ?
-    ''', [NetworkType.mtn.index, TransactionType.cashIn.index, startOfDay, endOfDay]);
+    ''', [
+      NetworkType.mtn.index,
+      TransactionType.cashIn.index,
+      startOfDay,
+      endOfDay
+    ]);
 
     final mtnCashOut = await db.rawQuery('''
       SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
       WHERE network = ? AND type = ? AND timestamp BETWEEN ? AND ?
-    ''', [NetworkType.mtn.index, TransactionType.cashOut.index, startOfDay, endOfDay]);
+    ''', [
+      NetworkType.mtn.index,
+      TransactionType.cashOut.index,
+      startOfDay,
+      endOfDay
+    ]);
 
     // Airtel Stats
     final airtelCashIn = await db.rawQuery('''
       SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
       WHERE network = ? AND type = ? AND timestamp BETWEEN ? AND ?
-    ''', [NetworkType.airtel.index, TransactionType.cashIn.index, startOfDay, endOfDay]);
+    ''', [
+      NetworkType.airtel.index,
+      TransactionType.cashIn.index,
+      startOfDay,
+      endOfDay
+    ]);
 
     final airtelCashOut = await db.rawQuery('''
       SELECT COALESCE(SUM(amount), 0) as total FROM transactions 
       WHERE network = ? AND type = ? AND timestamp BETWEEN ? AND ?
-    ''', [NetworkType.airtel.index, TransactionType.cashOut.index, startOfDay, endOfDay]);
+    ''', [
+      NetworkType.airtel.index,
+      TransactionType.cashOut.index,
+      startOfDay,
+      endOfDay
+    ]);
 
     // Total fees
     final totalFees = await db.rawQuery('''
@@ -168,7 +323,8 @@ class DatabaseHelper {
       'mtnCashIn': (mtnCashIn.first['total'] as num?)?.toDouble() ?? 0.0,
       'mtnCashOut': (mtnCashOut.first['total'] as num?)?.toDouble() ?? 0.0,
       'airtelCashIn': (airtelCashIn.first['total'] as num?)?.toDouble() ?? 0.0,
-      'airtelCashOut': (airtelCashOut.first['total'] as num?)?.toDouble() ?? 0.0,
+      'airtelCashOut':
+          (airtelCashOut.first['total'] as num?)?.toDouble() ?? 0.0,
       'totalFees': (totalFees.first['total'] as num?)?.toDouble() ?? 0.0,
       'mtnBalance': await getCurrentBalance(NetworkType.mtn),
       'airtelBalance': await getCurrentBalance(NetworkType.airtel),
@@ -180,10 +336,12 @@ class DatabaseHelper {
     final transactions = await getAllTransactions();
     final StringBuffer csv = StringBuffer();
 
-    csv.writeln('ID,Network,Type,Amount,Fee,Balance After,Customer Name,Customer Phone,Notes,Timestamp');
+    csv.writeln(
+        'ID,Network,Type,Service,Amount,Commission,Balance After,Customer Name,Customer Phone,Notes,Timestamp');
 
     for (var t in transactions) {
-      csv.writeln('${t.id},${t.networkLabel},${t.typeLabel},${t.amount},${t.fee ?? 0},${t.balanceAfter},"${t.customerName ?? ''}","${t.customerPhone ?? ''}","${t.notes ?? ''}",${t.timestamp.toIso8601String()}');
+      csv.writeln(
+          '${t.id},${t.networkLabel},${t.typeLabel},${t.serviceLabel},${t.amount},${t.fee ?? 0},${t.balanceAfter},"${t.customerName ?? ''}","${t.customerPhone ?? ''}","${t.notes ?? ''}",${t.timestamp.toIso8601String()}');
     }
 
     final directory = await getApplicationDocumentsDirectory();

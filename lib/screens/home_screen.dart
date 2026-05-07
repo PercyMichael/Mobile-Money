@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
-import '../database/database_helper.dart';
+import 'package:intl/intl.dart';
+import '../app_scope.dart';
+import '../controllers/home_controller.dart';
 import '../models/transaction.dart';
 import 'add_transaction_screen.dart';
 import 'history_screen.dart';
 import 'summary_screen.dart';
 
+/// Home view: displays balances and quick navigation actions.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -13,22 +16,29 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  late HomeController _controller;
   double mtnBalance = 0.0;
   double airtelBalance = 0.0;
   bool isLoading = true;
+  bool _initialized = false;
+  final _currency = NumberFormat.currency(symbol: 'UGX ', decimalDigits: 0);
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    // Read injected controller once from AppScope.
+    _controller = AppScope.of(context).homeController;
+    _initialized = true;
     _loadBalances();
   }
 
   Future<void> _loadBalances() async {
-    final mtn = await DatabaseHelper.instance.getCurrentBalance(NetworkType.mtn);
-    final airtel = await DatabaseHelper.instance.getCurrentBalance(NetworkType.airtel);
+    final balances = await _controller.loadBalances();
+    if (!mounted) return;
     setState(() {
-      mtnBalance = mtn;
-      airtelBalance = airtel;
+      mtnBalance = balances.$1;
+      airtelBalance = balances.$2;
       isLoading = false;
     });
   }
@@ -40,18 +50,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MoMo Float Tracker', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'MoMo Float Tracker',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.summarize),
+            tooltip: 'View summary',
+            icon: const Icon(Icons.analytics_outlined),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const SummaryScreen()),
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.history),
+            tooltip: 'View history',
+            icon: const Icon(Icons.history_toggle_off_rounded),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const HistoryScreen()),
@@ -75,8 +90,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       balance: mtnBalance,
                       color: getMtnColor(),
                       textColor: Colors.black,
-                      icon: Icons.phone_android,
-                      onTap: () => _navigateToAddTransaction(NetworkType.mtn),
+                      icon: Icons.sim_card_rounded,
+                      networkType: NetworkType.mtn,
+                      onTap: () => _showNetworkSelection(),
                     ),
                     const SizedBox(height: 16),
                     // Airtel Card
@@ -85,12 +101,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       balance: airtelBalance,
                       color: getAirtelColor(),
                       textColor: Colors.white,
-                      icon: Icons.phone_iphone,
-                      onTap: () => _navigateToAddTransaction(NetworkType.airtel),
+                      icon: Icons.contactless_rounded,
+                      networkType: NetworkType.airtel,
+                      onTap: () => _showNetworkSelection(),
                     ),
-                    const SizedBox(height: 24),
-                    // Quick Actions
-                    _buildQuickActions(),
                     const SizedBox(height: 24),
                     // Recent Activity Preview
                     _buildRecentActivityPreview(),
@@ -100,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showNetworkSelection(),
-        icon: const Icon(Icons.add),
+        icon: const Icon(Icons.post_add_rounded),
         label: const Text('New Transaction'),
       ),
     );
@@ -112,21 +126,37 @@ class _HomeScreenState extends State<HomeScreen> {
     required Color color,
     required Color textColor,
     required IconData icon,
+    required NetworkType networkType,
     required VoidCallback onTap,
   }) {
     return Card(
-      color: color,
+      elevation: 3,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [color, color.withOpacity(0.85)],
+            ),
+          ),
           padding: const EdgeInsets.all(20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Icon(icon, color: textColor, size: 28),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: textColor.withOpacity(0.14),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(icon, color: textColor, size: 22),
+                  ),
                   const SizedBox(width: 12),
                   Text(
                     network,
@@ -148,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'UGX ${balance.toStringAsFixed(0)}',
+                _currency.format(balance),
                 style: TextStyle(
                   color: textColor,
                   fontSize: 32,
@@ -160,13 +190,42 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Text(
-                    'Tap to add transaction',
+                    'Choose action',
                     style: TextStyle(
                       color: textColor.withOpacity(0.7),
                       fontSize: 12,
                     ),
                   ),
-                  Icon(Icons.arrow_forward, color: textColor.withOpacity(0.7), size: 16),
+                  Icon(Icons.touch_app_rounded,
+                      color: textColor.withOpacity(0.7), size: 16),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildCardActionButton(
+                      label: 'Deposit',
+                      icon: Icons.south_west_rounded,
+                      foregroundColor: textColor,
+                      onTap: () => _navigateToAddTransaction(
+                        networkType,
+                        preselectedType: TransactionType.cashIn,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildCardActionButton(
+                      label: 'Withdraw',
+                      icon: Icons.north_east_rounded,
+                      foregroundColor: textColor,
+                      onTap: () => _navigateToAddTransaction(
+                        networkType,
+                        preselectedType: TransactionType.cashOut,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -176,53 +235,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildQuickActions() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Quick Actions',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildActionButton(
-                icon: Icons.arrow_downward,
-                label: 'Cash In',
-                color: Colors.green,
-                onTap: () => _showNetworkSelection(type: TransactionType.cashIn),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildActionButton(
-                icon: Icons.arrow_upward,
-                label: 'Cash Out',
-                color: Colors.red,
-                onTap: () => _showNetworkSelection(type: TransactionType.cashOut),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionButton({
+  Widget _buildCardActionButton({
     required IconData icon,
     required String label,
-    required Color color,
+    required Color foregroundColor,
     required VoidCallback onTap,
   }) {
     return ElevatedButton.icon(
       onPressed: onTap,
-      icon: Icon(icon, color: Colors.white),
-      label: Text(label, style: const TextStyle(color: Colors.white)),
+      icon: Icon(icon, color: foregroundColor),
+      label: Text(label, style: TextStyle(color: foregroundColor)),
       style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        backgroundColor: foregroundColor.withOpacity(0.16),
+        elevation: 0,
+        padding: const EdgeInsets.symmetric(vertical: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
@@ -250,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SizedBox(height: 8),
         FutureBuilder<List<FloatTransaction>>(
-          future: DatabaseHelper.instance.getAllTransactions(),
+          future: _controller.loadRecentTransactions(),
           builder: (context, snapshot) {
             if (!snapshot.hasData || snapshot.data!.isEmpty) {
               return const Card(
@@ -262,7 +288,8 @@ class _HomeScreenState extends State<HomeScreen> {
             }
             final transactions = snapshot.data!.take(5).toList();
             return Column(
-              children: transactions.map((t) => _buildTransactionItem(t)).toList(),
+              children:
+                  transactions.map((t) => _buildTransactionItem(t)).toList(),
             );
           },
         ),
@@ -278,18 +305,18 @@ class _HomeScreenState extends State<HomeScreen> {
         leading: CircleAvatar(
           backgroundColor: isMtn ? getMtnColor() : getAirtelColor(),
           child: Icon(
-            t.isCashIn ? Icons.arrow_downward : Icons.arrow_upward,
+            t.isCashIn ? Icons.call_received_rounded : Icons.call_made_rounded,
             color: isMtn ? Colors.black : Colors.white,
             size: 18,
           ),
         ),
         title: Text(
-          '${t.typeLabel} - ${t.networkLabel}',
+          '${t.typeLabel} (${t.serviceLabel}) - ${t.networkLabel}',
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         subtitle: Text(t.formattedDate),
         trailing: Text(
-          'UGX ${t.amount.toStringAsFixed(0)}',
+          _currency.format(t.amount),
           style: TextStyle(
             fontWeight: FontWeight.bold,
             color: t.isCashIn ? Colors.green : Colors.red,
@@ -315,19 +342,28 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 16),
               ListTile(
-                leading: CircleAvatar(backgroundColor: getMtnColor(), child: const Icon(Icons.phone_android, color: Colors.black)),
-                title: const Text('MTN MoMo', style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: CircleAvatar(
+                    backgroundColor: getMtnColor(),
+                    child:
+                        const Icon(Icons.phone_android, color: Colors.black)),
+                title: const Text('MTN MoMo',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
                 onTap: () {
                   Navigator.pop(context);
-                  _navigateToAddTransaction(NetworkType.mtn, preselectedType: type);
+                  _navigateToAddTransaction(NetworkType.mtn,
+                      preselectedType: type);
                 },
               ),
               ListTile(
-                leading: CircleAvatar(backgroundColor: getAirtelColor(), child: const Icon(Icons.phone_iphone, color: Colors.white)),
-                title: const Text('Airtel Money', style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: CircleAvatar(
+                    backgroundColor: getAirtelColor(),
+                    child: const Icon(Icons.phone_iphone, color: Colors.white)),
+                title: const Text('Airtel Money',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
                 onTap: () {
                   Navigator.pop(context);
-                  _navigateToAddTransaction(NetworkType.airtel, preselectedType: type);
+                  _navigateToAddTransaction(NetworkType.airtel,
+                      preselectedType: type);
                 },
               ),
             ],
@@ -337,7 +373,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _navigateToAddTransaction(NetworkType network, {TransactionType? preselectedType}) {
+  void _navigateToAddTransaction(NetworkType network,
+      {TransactionType? preselectedType}) {
     Navigator.push(
       context,
       MaterialPageRoute(

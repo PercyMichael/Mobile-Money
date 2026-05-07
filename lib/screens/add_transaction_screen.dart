@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import '../database/database_helper.dart';
+import 'package:intl/intl.dart';
+import '../app_scope.dart';
+import '../controllers/transaction_controller.dart';
 import '../models/transaction.dart';
+import '../utils/ugx_input_formatter.dart';
 
+/// Transaction form view for both create and edit flows.
 class AddTransactionScreen extends StatefulWidget {
   final NetworkType network;
   final TransactionType? preselectedType;
+  final FloatTransaction? existingTransaction;
 
   const AddTransactionScreen({
     super.key,
     required this.network,
     this.preselectedType,
+    this.existingTransaction,
   });
 
   @override
@@ -18,20 +23,46 @@ class AddTransactionScreen extends StatefulWidget {
 }
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
+  late TransactionController _controller;
   final _formKey = GlobalKey<FormState>();
   final _amountController = TextEditingController();
   final _feeController = TextEditingController();
   final _customerNameController = TextEditingController();
   final _customerPhoneController = TextEditingController();
   final _notesController = TextEditingController();
+  final _ugxInputFormatter = UgxInputFormatter();
 
   late TransactionType _selectedType;
+  late ServiceType _selectedServiceType;
   bool _isLoading = false;
+  bool _initialized = false;
 
   @override
-  void initState() {
-    super.initState();
-    _selectedType = widget.preselectedType ?? TransactionType.cashIn;
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    // Read injected controller once from AppScope.
+    _controller = AppScope.of(context).transactionController;
+    _initialized = true;
+    _selectedType = widget.existingTransaction?.type ??
+        widget.preselectedType ??
+        TransactionType.cashIn;
+    _selectedServiceType =
+        widget.existingTransaction?.serviceType ?? ServiceType.momo;
+
+    // Prefill fields when editing an existing transaction.
+    final existing = widget.existingTransaction;
+    if (existing != null) {
+      _amountController.text =
+          NumberFormat.decimalPattern().format(existing.amount.round());
+      if (existing.fee != null && existing.fee! > 0) {
+        _feeController.text =
+            NumberFormat.decimalPattern().format(existing.fee!.round());
+      }
+      _customerNameController.text = existing.customerName ?? '';
+      _customerPhoneController.text = existing.customerPhone ?? '';
+      _notesController.text = existing.notes ?? '';
+    }
   }
 
   Color getNetworkColor() {
@@ -46,7 +77,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${isMtn ? 'MTN MoMo' : 'Airtel Money'} - New Transaction'),
+        title: Text(
+          '${isMtn ? 'MTN MoMo' : 'Airtel Money'} - ${widget.existingTransaction == null ? 'New Transaction' : 'Edit Transaction'}',
+        ),
         backgroundColor: getNetworkColor(),
         foregroundColor: isMtn ? Colors.black : Colors.white,
       ),
@@ -62,13 +95,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 segments: const [
                   ButtonSegment(
                     value: TransactionType.cashIn,
-                    label: Text('Cash In'),
-                    icon: Icon(Icons.arrow_downward),
+                    label: Text('Deposit'),
+                    icon: Icon(Icons.add_circle_outline_rounded),
                   ),
                   ButtonSegment(
                     value: TransactionType.cashOut,
-                    label: Text('Cash Out'),
-                    icon: Icon(Icons.arrow_upward),
+                    label: Text('Withdraw'),
+                    icon: Icon(Icons.remove_circle_outline_rounded),
                   ),
                 ],
                 selected: {_selectedType},
@@ -79,21 +112,50 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 },
               ),
               const SizedBox(height: 24),
+              SegmentedButton<ServiceType>(
+                segments: const [
+                  ButtonSegment(
+                    value: ServiceType.momo,
+                    label: Text('Money'),
+                    icon: Icon(Icons.payments_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ServiceType.airtime,
+                    label: Text('Airtime'),
+                    icon: Icon(Icons.call_rounded),
+                  ),
+                  ButtonSegment(
+                    value: ServiceType.data,
+                    label: Text('Data'),
+                    icon: Icon(Icons.wifi_rounded),
+                  ),
+                ],
+                selected: {_selectedServiceType},
+                onSelectionChanged: (Set<ServiceType> newSelection) {
+                  setState(() {
+                    _selectedServiceType = newSelection.first;
+                  });
+                },
+              ),
+              const SizedBox(height: 24),
 
               // Amount
               TextFormField(
                 controller: _amountController,
                 keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                inputFormatters: [_ugxInputFormatter],
                 decoration: InputDecoration(
                   labelText: 'Amount (UGX)',
                   prefixText: 'UGX ',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   filled: true,
                 ),
                 validator: (value) {
-                  if (value == null || value.isEmpty) return 'Please enter amount';
-                  if (double.tryParse(value) == null || double.parse(value) <= 0) {
+                  if (value == null || value.isEmpty)
+                    return 'Please enter amount';
+                  final parsedValue = _parseCurrencyText(value);
+                  if (parsedValue == null || parsedValue <= 0) {
                     return 'Please enter a valid amount';
                   }
                   return null;
@@ -105,13 +167,24 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               TextFormField(
                 controller: _feeController,
                 keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                inputFormatters: [_ugxInputFormatter],
                 decoration: InputDecoration(
-                  labelText: 'Fee/Charges (UGX) - Optional',
+                  labelText: 'Commission (UGX)',
                   prefixText: 'UGX ',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   filled: true,
                 ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter commission';
+                  }
+                  final parsedValue = _parseCurrencyText(value);
+                  if (parsedValue == null || parsedValue <= 0) {
+                    return 'Please enter a valid commission';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 16),
 
@@ -122,7 +195,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 decoration: InputDecoration(
                   labelText: 'Customer Name (Optional)',
                   prefixIcon: const Icon(Icons.person),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   filled: true,
                 ),
               ),
@@ -135,7 +209,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 decoration: InputDecoration(
                   labelText: 'Customer Phone (Optional)',
                   prefixIcon: const Icon(Icons.phone),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   filled: true,
                 ),
               ),
@@ -149,7 +224,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 decoration: InputDecoration(
                   labelText: 'Notes (Optional)',
                   prefixIcon: const Icon(Icons.note),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                   filled: true,
                 ),
               ),
@@ -163,13 +239,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: getNetworkColor(),
                     foregroundColor: isMtn ? Colors.black : Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator()
                       : Text(
-                          'Record ${_selectedType == TransactionType.cashIn ? 'Cash In' : 'Cash Out'}',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          '${widget.existingTransaction == null ? 'Record' : 'Save'} ${_selectedType == TransactionType.cashIn ? 'Deposit' : 'Withdraw'}',
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold),
                         ),
                 ),
               ),
@@ -186,53 +264,41 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final amount = double.parse(_amountController.text);
-      final fee = _feeController.text.isNotEmpty ? double.parse(_feeController.text) : null;
-
-      // Get current balance and calculate new balance
-      final currentBalance = await DatabaseHelper.instance.getCurrentBalance(widget.network);
-      double newBalance;
-
-      if (_selectedType == TransactionType.cashIn) {
-        newBalance = currentBalance + amount;
-      } else {
-        if (currentBalance < amount) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Insufficient float balance!'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-          setState(() => _isLoading = false);
-          return;
-        }
-        newBalance = currentBalance - amount;
+      final amount = _parseCurrencyText(_amountController.text);
+      final fee = _parseCurrencyText(_feeController.text);
+      if (amount == null) {
+        throw const FormatException('Invalid amount');
       }
-
-      final transaction = FloatTransaction(
+      if (fee == null || fee <= 0) {
+        throw const FormatException('Invalid commission');
+      }
+      final existing = widget.existingTransaction;
+      final result = await _controller.submitTransaction(
         network: widget.network,
         type: _selectedType,
+        serviceType: _selectedServiceType,
         amount: amount,
         fee: fee,
-        balanceAfter: newBalance,
-        customerName: _customerNameController.text.isNotEmpty ? _customerNameController.text : null,
-        customerPhone: _customerPhoneController.text.isNotEmpty ? _customerPhoneController.text : null,
+        customerName: _customerNameController.text.isNotEmpty
+            ? _customerNameController.text
+            : null,
+        customerPhone: _customerPhoneController.text.isNotEmpty
+            ? _customerPhoneController.text
+            : null,
         notes: _notesController.text.isNotEmpty ? _notesController.text : null,
-        timestamp: DateTime.now(),
+        existingTransaction: existing,
       );
-
-      await DatabaseHelper.instance.insertTransaction(transaction);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Transaction recorded! New balance: UGX ${newBalance.toStringAsFixed(0)}'),
-            backgroundColor: Colors.green,
+            content: Text(result.message),
+            backgroundColor: result.success ? Colors.green : Colors.red,
           ),
         );
-        Navigator.pop(context);
+        if (result.success) {
+          Navigator.pop(context);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -243,6 +309,12 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  double? _parseCurrencyText(String input) {
+    final cleaned = input.replaceAll(',', '').trim();
+    if (cleaned.isEmpty) return null;
+    return double.tryParse(cleaned);
   }
 
   @override

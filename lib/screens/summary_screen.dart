@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import '../database/database_helper.dart';
+import '../app_scope.dart';
+import '../controllers/summary_controller.dart';
 import 'package:intl/intl.dart';
 
+/// Summary view: renders daily totals and balances.
 class SummaryScreen extends StatefulWidget {
   const SummaryScreen({super.key});
 
@@ -10,24 +12,32 @@ class SummaryScreen extends StatefulWidget {
 }
 
 class _SummaryScreenState extends State<SummaryScreen> {
+  late SummaryController _controller;
   Map<String, dynamic> summary = {};
   bool isLoading = true;
+  bool _initialized = false;
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    // Read injected controller once from AppScope.
+    _controller = AppScope.of(context).summaryController;
+    _initialized = true;
     _loadSummary();
   }
 
   Future<void> _loadSummary() async {
-    final data = await DatabaseHelper.instance.getSummary();
+    final data = await _controller.loadSummary();
+    if (!mounted) return;
     setState(() {
       summary = data;
       isLoading = false;
     });
   }
 
-  String fmt(double val) => NumberFormat.currency(symbol: 'UGX ', decimalDigits: 0).format(val);
+  String fmt(double val) =>
+      NumberFormat.currency(symbol: 'UGX ', decimalDigits: 0).format(val);
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +46,8 @@ class _SummaryScreenState extends State<SummaryScreen> {
         title: const Text('Daily Summary'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh summary',
+            icon: const Icon(Icons.refresh_rounded),
             onPressed: () {
               setState(() => isLoading = true);
               _loadSummary();
@@ -56,7 +67,10 @@ class _SummaryScreenState extends State<SummaryScreen> {
                   children: [
                     Text(
                       'Today - ${DateFormat('EEEE, dd MMMM yyyy').format(DateTime.now())}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.grey),
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.grey),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 24),
@@ -120,21 +134,21 @@ class _SummaryScreenState extends State<SummaryScreen> {
               children: [
                 Expanded(
                   child: _buildStatBox(
-                    'Cash In',
+                    'Deposit',
                     cashIn,
                     Colors.green,
                     textColor,
-                    Icons.arrow_downward,
+                    Icons.south_west_rounded,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildStatBox(
-                    'Cash Out',
+                    'Withdraw',
                     cashOut,
                     Colors.red,
                     textColor,
-                    Icons.arrow_upward,
+                    Icons.north_east_rounded,
                   ),
                 ),
               ],
@@ -149,6 +163,12 @@ class _SummaryScreenState extends State<SummaryScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  Icon(
+                    Icons.account_balance_wallet_outlined,
+                    color: textColor.withOpacity(0.8),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
                   Text(
                     'Current Float Balance',
                     style: TextStyle(color: textColor.withOpacity(0.8)),
@@ -170,7 +190,8 @@ class _SummaryScreenState extends State<SummaryScreen> {
     );
   }
 
-  Widget _buildStatBox(String label, double amount, Color amountColor, Color textColor, IconData icon) {
+  Widget _buildStatBox(String label, double amount, Color amountColor,
+      Color textColor, IconData icon) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -184,7 +205,9 @@ class _SummaryScreenState extends State<SummaryScreen> {
             children: [
               Icon(icon, color: amountColor, size: 16),
               const SizedBox(width: 4),
-              Text(label, style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 12)),
+              Text(label,
+                  style: TextStyle(
+                      color: textColor.withOpacity(0.8), fontSize: 12)),
             ],
           ),
           const SizedBox(height: 4),
@@ -202,8 +225,10 @@ class _SummaryScreenState extends State<SummaryScreen> {
   }
 
   Widget _buildCombinedStats() {
-    final totalCashIn = (summary['mtnCashIn'] ?? 0.0) + (summary['airtelCashIn'] ?? 0.0);
-    final totalCashOut = (summary['mtnCashOut'] ?? 0.0) + (summary['airtelCashOut'] ?? 0.0);
+    final totalCashIn =
+        (summary['mtnCashIn'] ?? 0.0) + (summary['airtelCashIn'] ?? 0.0);
+    final totalCashOut =
+        (summary['mtnCashOut'] ?? 0.0) + (summary['airtelCashOut'] ?? 0.0);
     final totalFees = summary['totalFees'] ?? 0.0;
     final netFlow = totalCashIn - totalCashOut;
 
@@ -218,13 +243,14 @@ class _SummaryScreenState extends State<SummaryScreen> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            _buildOverviewRow('Total Cash In', totalCashIn, Colors.green),
+            _buildOverviewRow('Total Deposits', totalCashIn, Colors.green),
             const Divider(),
-            _buildOverviewRow('Total Cash Out', totalCashOut, Colors.red),
+            _buildOverviewRow('Total Withdrawals', totalCashOut, Colors.red),
             const Divider(),
-            _buildOverviewRow('Total Fees Earned', totalFees, Colors.blue),
+            _buildOverviewRow('Total Commission Earned', totalFees, Colors.blue),
             const Divider(),
-            _buildOverviewRow('Net Float Flow', netFlow, netFlow >= 0 ? Colors.green : Colors.red),
+            _buildOverviewRow('Net Float Flow', netFlow,
+                netFlow >= 0 ? Colors.green : Colors.red),
           ],
         ),
       ),
@@ -237,7 +263,13 @@ class _SummaryScreenState extends State<SummaryScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 16)),
+          Row(
+            children: [
+              Icon(_overviewIcon(label), color: color, size: 18),
+              const SizedBox(width: 8),
+              Text(label, style: const TextStyle(fontSize: 16)),
+            ],
+          ),
           Text(
             fmt(amount),
             style: TextStyle(
@@ -249,5 +281,18 @@ class _SummaryScreenState extends State<SummaryScreen> {
         ],
       ),
     );
+  }
+
+  IconData _overviewIcon(String label) {
+    switch (label) {
+      case 'Total Deposits':
+        return Icons.download_rounded;
+      case 'Total Withdrawals':
+        return Icons.upload_rounded;
+      case 'Total Commission Earned':
+        return Icons.savings_outlined;
+      default:
+        return Icons.show_chart_rounded;
+    }
   }
 }
